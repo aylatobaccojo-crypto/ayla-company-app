@@ -23,7 +23,7 @@
     },
     "android": {
       "package": "com.ayla.cashvan",
-      "versionCode": 5,
+      "versionCode": 6,
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",

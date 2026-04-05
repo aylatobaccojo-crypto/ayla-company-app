@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, PermissionsAndroid, Platform } from "react-native";
 
 const BT_PRINTER_KEY = "cashvan_bt_printer_v1";
+const BT_PAPER_KEY   = "cashvan_bt_paper_v1";
 
 export interface BTPrinterDevice {
   name: string;
@@ -10,6 +11,7 @@ export interface BTPrinterDevice {
 }
 
 export type PrinterStatus = "idle" | "scanning" | "connecting" | "connected" | "printing" | "error";
+export type PaperSize = "58" | "80";
 
 let BluetoothManager: any = null;
 let BluetoothEscposPrinter: any = null;
@@ -22,7 +24,7 @@ if (Platform.OS !== "web") {
   } catch (_) {}
 }
 
-// طلب صلاحيات البلوتوث - مطلوبة على Android 6+
+// طلب صلاحيات البلوتوث — مطلوبة على Android 6+
 async function requestBluetoothPermissions(): Promise<boolean> {
   if (Platform.OS !== "android") return true;
   try {
@@ -59,17 +61,30 @@ export function useBluetooth() {
   const [savedPrinter, setSavedPrinter] = useState<BTPrinterDevice | null>(null);
   const [connectedPrinter, setConnectedPrinter] = useState<BTPrinterDevice | null>(null);
   const [isBluetoothOn, setIsBluetoothOn] = useState(false);
+  const [paperSize, setPaperSizeState] = useState<PaperSize>("80");
   const connectedRef = useRef(false);
 
   const isNative = Platform.OS === "android" && !!BluetoothManager;
 
-  // تحميل الطابعة المحفوظة عند البدء
+  // تحميل الإعدادات المحفوظة عند البدء
   useEffect(() => {
-    AsyncStorage.getItem(BT_PRINTER_KEY).then((val) => {
-      if (val) {
-        try { setSavedPrinter(JSON.parse(val)); } catch (_) {}
+    AsyncStorage.multiGet([BT_PRINTER_KEY, BT_PAPER_KEY]).then((pairs) => {
+      for (const [key, val] of pairs) {
+        if (!val) continue;
+        if (key === BT_PRINTER_KEY) {
+          try { setSavedPrinter(JSON.parse(val)); } catch (_) {}
+        }
+        if (key === BT_PAPER_KEY) {
+          if (val === "58" || val === "80") setPaperSizeState(val);
+        }
       }
     });
+  }, []);
+
+  // حفظ حجم الورق
+  const setPaperSize = useCallback(async (size: PaperSize) => {
+    setPaperSizeState(size);
+    await AsyncStorage.setItem(BT_PAPER_KEY, size);
   }, []);
 
   // فحص حالة البلوتوث
@@ -113,7 +128,6 @@ export function useBluetooth() {
       // 2. فحص أو تفعيل البلوتوث
       let btOn = await checkBluetooth();
       if (!btOn) {
-        // على Android 13+ لا يمكن تفعيل البلوتوث برمجياً - نطلب من المستخدم
         if ((Platform.Version as number) >= 33) {
           setStatus("error");
           Alert.alert(
@@ -127,9 +141,7 @@ export function useBluetooth() {
           await BluetoothManager.enableBluetooth();
           await new Promise((res) => setTimeout(res, 1500));
           btOn = await BluetoothManager.isBluetoothEnabled();
-        } catch (_) {
-          btOn = false;
-        }
+        } catch (_) { btOn = false; }
         if (!btOn) {
           setStatus("error");
           Alert.alert("البلوتوث معطّل", "يرجى تفعيل البلوتوث من إعدادات الهاتف.");
@@ -141,26 +153,17 @@ export function useBluetooth() {
       const result = await BluetoothManager.scanDevices();
       const paired: BTPrinterDevice[] = [];
 
-      // الأجهزة المقترنة مسبقاً
       if (result?.paired) {
-        const list = typeof result.paired === "string"
-          ? JSON.parse(result.paired)
-          : result.paired;
+        const list = typeof result.paired === "string" ? JSON.parse(result.paired) : result.paired;
         for (const d of list) {
-          if (d.name && d.address) {
-            paired.push({ name: d.name, address: d.address });
-          }
+          if (d.name && d.address) paired.push({ name: d.name, address: d.address });
         }
       }
-      // الأجهزة المكتشفة حديثاً
       if (result?.found) {
-        const list = typeof result.found === "string"
-          ? JSON.parse(result.found)
-          : result.found;
+        const list = typeof result.found === "string" ? JSON.parse(result.found) : result.found;
         for (const d of list) {
-          if (d.name && d.address && !paired.find((p) => p.address === d.address)) {
+          if (d.name && d.address && !paired.find((p) => p.address === d.address))
             paired.push({ name: d.name, address: d.address });
-          }
         }
       }
 
@@ -171,18 +174,13 @@ export function useBluetooth() {
           [{ text: "حسناً" }]
         );
       }
-
       setPairedDevices(paired);
       setStatus("idle");
     } catch (e: any) {
       setStatus("error");
       const msg = e?.message || String(e) || "";
       if (msg.toLowerCase().includes("permission") || msg.toLowerCase().includes("security")) {
-        Alert.alert(
-          "خطأ في الصلاحيات",
-          "يرجى السماح بصلاحيات البلوتوث من إعدادات التطبيق.",
-          [{ text: "حسناً" }]
-        );
+        Alert.alert("خطأ في الصلاحيات", "يرجى السماح بصلاحيات البلوتوث من إعدادات التطبيق.", [{ text: "حسناً" }]);
       } else {
         Alert.alert("خطأ في البحث", msg || "تعذّر البحث عن الأجهزة.");
       }
@@ -241,14 +239,16 @@ export function useBluetooth() {
     setStatus("printing");
     try {
       const ALIGN = { left: 0, center: 1, right: 2 };
+      // عرض الورق: 58mm = ~32 حرف، 80mm = ~48 حرف
+      const lineWidth = paperSize === "58" ? 32 : 48;
+
       for (const line of lines) {
         await BluetoothEscposPrinter.printerAlign(ALIGN[line.align || "right"]);
         const config: any = { fonttype: line.bold ? 1 : 0 };
-        if (line.size === "large") {
-          config.widthtimes = 1;
-          config.heigthtimes = 1;
-        }
-        await BluetoothEscposPrinter.printText(line.text + "\n", config);
+        if (line.size === "large") { config.widthtimes = 1; config.heigthtimes = 1; }
+        // قص النص إذا تجاوز عرض الورق
+        const txt = line.text.length > lineWidth ? line.text.substring(0, lineWidth) : line.text;
+        await BluetoothEscposPrinter.printText(txt + "\n", config);
       }
       await BluetoothEscposPrinter.printText("\n\n\n", {});
       setStatus("connected");
@@ -258,7 +258,7 @@ export function useBluetooth() {
       Alert.alert("خطأ في الطباعة", e?.message || "فشلت عملية الطباعة.");
       return false;
     }
-  }, [isNative, connectedPrinter]);
+  }, [isNative, connectedPrinter, paperSize]);
 
   // الاتصال التلقائي
   const autoConnect = useCallback(async (): Promise<boolean> => {
@@ -273,6 +273,8 @@ export function useBluetooth() {
     pairedDevices,
     savedPrinter,
     connectedPrinter,
+    paperSize,
+    setPaperSize,
     isConnected: !!connectedPrinter,
     checkBluetooth,
     scanDevices,

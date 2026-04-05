@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Platform } from "react-native";
+import { Alert, PermissionsAndroid, Platform } from "react-native";
 
 const BT_PRINTER_KEY = "cashvan_bt_printer_v1";
 
@@ -20,6 +20,37 @@ if (Platform.OS !== "web") {
     BluetoothManager = mod.BluetoothManager;
     BluetoothEscposPrinter = mod.BluetoothEscposPrinter;
   } catch (_) {}
+}
+
+// طلب صلاحيات البلوتوث - مطلوبة على Android 6+
+async function requestBluetoothPermissions(): Promise<boolean> {
+  if (Platform.OS !== "android") return true;
+  try {
+    if ((Platform.Version as number) >= 31) {
+      // Android 12+ يتطلب BLUETOOTH_SCAN و BLUETOOTH_CONNECT
+      const results = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+      ]);
+      const scanOk = results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] === PermissionsAndroid.RESULTS.GRANTED;
+      const connectOk = results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] === PermissionsAndroid.RESULTS.GRANTED;
+      return scanOk && connectOk;
+    } else {
+      // Android < 12 يتطلب الموقع للمسح
+      const result = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        {
+          title: "صلاحية الموقع",
+          message: "يحتاج التطبيق صلاحية الموقع للبحث عن أجهزة البلوتوث.",
+          buttonPositive: "سماح",
+          buttonNegative: "رفض",
+        }
+      );
+      return result === PermissionsAndroid.RESULTS.GRANTED;
+    }
+  } catch (_) {
+    return false;
+  }
 }
 
 export function useBluetooth() {
@@ -53,7 +84,7 @@ export function useBluetooth() {
     }
   }, [isNative]);
 
-  // مسح الأجهزة المقترنة
+  // مسح الأجهزة
   const scanDevices = useCallback(async () => {
     if (!isNative) {
       Alert.alert(
@@ -63,20 +94,50 @@ export function useBluetooth() {
       );
       return;
     }
+
     setStatus("scanning");
+
+    // 1. طلب الصلاحيات أولاً
+    const hasPermissions = await requestBluetoothPermissions();
+    if (!hasPermissions) {
+      setStatus("error");
+      Alert.alert(
+        "صلاحيات مرفوضة",
+        "يحتاج التطبيق صلاحيات البلوتوث للبحث عن الطابعات.\nيرجى السماح من إعدادات التطبيق.",
+        [{ text: "حسناً" }]
+      );
+      return;
+    }
+
     try {
-      const btOn = await checkBluetooth();
+      // 2. فحص أو تفعيل البلوتوث
+      let btOn = await checkBluetooth();
       if (!btOn) {
-        await BluetoothManager.enableBluetooth();
-        await new Promise((res) => setTimeout(res, 1000));
-        const recheckOn = await BluetoothManager.isBluetoothEnabled();
-        if (!recheckOn) {
+        // على Android 13+ لا يمكن تفعيل البلوتوث برمجياً - نطلب من المستخدم
+        if ((Platform.Version as number) >= 33) {
+          setStatus("error");
+          Alert.alert(
+            "البلوتوث معطّل",
+            "يرجى تفعيل البلوتوث من إعدادات الهاتف ثم حاول مجدداً.",
+            [{ text: "حسناً" }]
+          );
+          return;
+        }
+        try {
+          await BluetoothManager.enableBluetooth();
+          await new Promise((res) => setTimeout(res, 1500));
+          btOn = await BluetoothManager.isBluetoothEnabled();
+        } catch (_) {
+          btOn = false;
+        }
+        if (!btOn) {
           setStatus("error");
           Alert.alert("البلوتوث معطّل", "يرجى تفعيل البلوتوث من إعدادات الهاتف.");
           return;
         }
       }
 
+      // 3. البحث عن الأجهزة
       const result = await BluetoothManager.scanDevices();
       const paired: BTPrinterDevice[] = [];
 
@@ -103,11 +164,28 @@ export function useBluetooth() {
         }
       }
 
+      if (paired.length === 0) {
+        Alert.alert(
+          "لا توجد أجهزة",
+          "لم يُعثر على طابعات. تأكد من:\n• أن الطابعة مشغّلة\n• أنها مقترنة بهاتفك من إعدادات البلوتوث",
+          [{ text: "حسناً" }]
+        );
+      }
+
       setPairedDevices(paired);
       setStatus("idle");
     } catch (e: any) {
       setStatus("error");
-      Alert.alert("خطأ في البحث", e?.message || "تعذّر البحث عن الأجهزة.");
+      const msg = e?.message || String(e) || "";
+      if (msg.toLowerCase().includes("permission") || msg.toLowerCase().includes("security")) {
+        Alert.alert(
+          "خطأ في الصلاحيات",
+          "يرجى السماح بصلاحيات البلوتوث من إعدادات التطبيق.",
+          [{ text: "حسناً" }]
+        );
+      } else {
+        Alert.alert("خطأ في البحث", msg || "تعذّر البحث عن الأجهزة.");
+      }
     }
   }, [isNative, checkBluetooth]);
 
@@ -136,15 +214,13 @@ export function useBluetooth() {
   // قطع الاتصال
   const disconnectPrinter = useCallback(async () => {
     if (!isNative) return;
-    try {
-      await BluetoothManager.disconnect();
-    } catch (_) {}
+    try { await BluetoothManager.disconnect(); } catch (_) {}
     setConnectedPrinter(null);
     connectedRef.current = false;
     setStatus("idle");
   }, [isNative]);
 
-  // حفظ الطابعة بدون اتصال (للتذكّر)
+  // حفظ الطابعة
   const savePrinter = useCallback(async (device: BTPrinterDevice) => {
     setSavedPrinter(device);
     await AsyncStorage.setItem(BT_PRINTER_KEY, JSON.stringify(device));
@@ -184,7 +260,7 @@ export function useBluetooth() {
     }
   }, [isNative, connectedPrinter]);
 
-  // الاتصال التلقائي بالطابعة المحفوظة
+  // الاتصال التلقائي
   const autoConnect = useCallback(async (): Promise<boolean> => {
     if (!isNative || !savedPrinter) return false;
     return connectPrinter(savedPrinter);

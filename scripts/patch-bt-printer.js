@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 /**
- * Patches react-native-bluetooth-escpos-printer for RN 0.81 compatibility:
- * 1. build.gradle: removes JCenter, updates SDK to 34, adds androidx.core
- * 2. Java imports: android.support.* → androidx.*
- * 3. scanDevices fix: return paired devices even when startDiscovery() fails
- *    (startDiscovery fails when Location Services are disabled on Android 6-11)
+ * Patches react-native-bluetooth-escpos-printer for RN 0.81 / Android SDK 34:
+ * 1. build.gradle  — removes JCenter (shut down), uses google()+mavenCentral(), adds androidx.core
+ * 2. Java imports  — android.support.* → androidx.*
+ * 3. scanDevices   — returns paired devices even when startDiscovery() fails (Location off)
  */
-const fs = require('fs');
+const fs   = require('fs');
 const path = require('path');
 const btDir = path.join(__dirname, '..', 'node_modules', 'react-native-bluetooth-escpos-printer');
 
@@ -50,7 +49,7 @@ dependencies {
 }
 `;
 fs.writeFileSync(gradleFile, newGradle);
-console.log('✓ Patched build.gradle');
+console.log('✓ Patched build.gradle (removed JCenter, SDK 34, androidx.core)');
 
 // ─── 2. Patch Java source ─────────────────────────────────────────────────────
 const javaFile = path.join(
@@ -61,7 +60,7 @@ const javaFile = path.join(
 if (fs.existsSync(javaFile)) {
   let java = fs.readFileSync(javaFile, 'utf8');
 
-  // 2a. Migrate android.support.* → androidx.*
+  // 2a. android.support.* → androidx.*
   java = java.replace(
     'import android.support.v4.app.ActivityCompat;',
     'import androidx.core.app.ActivityCompat;'
@@ -70,17 +69,9 @@ if (fs.existsSync(javaFile)) {
     'import android.support.v4.content.ContextCompat;',
     'import androidx.core.content.ContextCompat;'
   );
-  console.log('✓ Patched Java imports (android.support → androidx)');
 
-  // 2b. Fix scanDevices: when startDiscovery() fails, resolve with paired devices
-  //     instead of rejecting with NOT_STARTED.
-  //     Original:
-  //       if (!adapter.startDiscovery()) {
-  //           promise.reject("DISCOVER", "NOT_STARTED");
-  //           cancelDisCovery();
-  //       } else {
-  //           promiseMap.put(PROMISE_SCAN, promise);
-  //       }
+  // 2b. scanDevices: resolve with paired devices when startDiscovery() fails
+  //     instead of rejecting with NOT_STARTED
   const oldScan = `if (!adapter.startDiscovery()) {
                 promise.reject("DISCOVER", "NOT_STARTED");
                 cancelDisCovery();
@@ -89,8 +80,6 @@ if (fs.existsSync(javaFile)) {
             }`;
 
   const newScan = `if (!adapter.startDiscovery()) {
-                // Discovery unavailable (location off or adapter busy).
-                // Return the already-collected paired/bonded devices instead.
                 WritableMap scanResult = Arguments.createMap();
                 scanResult.putString("paired", pairedDeivce.toString());
                 scanResult.putString("found", "[]");
@@ -101,19 +90,16 @@ if (fs.existsSync(javaFile)) {
 
   if (java.includes(oldScan)) {
     java = java.replace(oldScan, newScan);
-    console.log('✓ Patched scanDevices (returns paired devices when discovery fails)');
+    console.log('✓ Patched scanDevices (returns paired on discovery failure)');
   } else {
-    // Fallback: try a simpler pattern match
+    // Fallback — replace just the reject line
     java = java.replace(
       'promise.reject("DISCOVER", "NOT_STARTED");',
-      `WritableMap scanResult = Arguments.createMap();
-                scanResult.putString("paired", pairedDeivce.toString());
-                scanResult.putString("found", "[]");
-                promise.resolve(scanResult);
-                // was: promise.reject("DISCOVER", "NOT_STARTED");`
+      `WritableMap _r=Arguments.createMap();_r.putString("paired",pairedDeivce.toString());_r.putString("found","[]");promise.resolve(_r);`
     );
-    console.log('✓ Patched scanDevices (fallback pattern)');
+    console.log('✓ Patched scanDevices (fallback)');
   }
 
   fs.writeFileSync(javaFile, java);
+  console.log('✓ Patched RNBluetoothManagerModule.java');
 }

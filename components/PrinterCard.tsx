@@ -104,7 +104,7 @@ export function PrinterCard() {
             ) : (
               <Feather name="search" size={16} color="#fff" />
             )}
-            <Text style={styles.btnTxt}>{isScanning ? "جاري البحث..." : "بحث عن طابعة"}</Text>
+            <Text style={styles.btnTxt}>{isScanning ? "جاري التهيئة والبحث..." : "بحث عن طابعة"}</Text>
           </TouchableOpacity>
 
           {/* قطع الاتصال */}

@@ -244,13 +244,19 @@ export function useBluetooth() {
 
       for (const line of lines) {
         await BluetoothEscposPrinter.printerAlign(ALIGN[line.align || "right"]);
-        const config: any = { fonttype: line.bold ? 1 : 0 };
+        const config: any = {
+          fonttype: line.bold ? 1 : 0,
+          // صفحة عربية 28 (Windows-1256) — تدعمها معظم طابعات ESC/POS
+          encoding: "windows-1256",
+          codepage: 28,
+        };
         if (line.size === "large") { config.widthtimes = 1; config.heigthtimes = 1; }
         // قص النص إذا تجاوز عرض الورق
         const txt = line.text.length > lineWidth ? line.text.substring(0, lineWidth) : line.text;
         await BluetoothEscposPrinter.printText(txt + "\n", config);
       }
-      await BluetoothEscposPrinter.printText("\n\n\n", {});
+      // سطور فراغ بعد الفاتورة
+      await BluetoothEscposPrinter.printText("\n\n\n", { encoding: "windows-1256", codepage: 28 });
       setStatus("connected");
       return true;
     } catch (e: any) {

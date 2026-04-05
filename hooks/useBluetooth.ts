@@ -137,31 +137,19 @@ export function useBluetooth() {
         return;
       }
 
-      // 3. تأكد من تهيئة محرك البلوتوث قبل المسح
-      try {
-        await BluetoothManager.enableBluetooth();
-      } catch (_) {
-        // تجاهل — قد يُلقي خطأ إذا كان البلوتوث مفعّلاً مسبقاً
-      }
-      // انتظار قصير لضمان جاهزية المحرك
-      await new Promise((res) => setTimeout(res, 1200));
-
-      // 4. البحث عن الأجهزة
+      // 3. البحث عن الأجهزة (الـ patch يعيد الأجهزة المقترنة حتى لو فشل الـ discovery)
       let result: any;
       try {
         result = await BluetoothManager.scanDevices();
       } catch (scanErr: any) {
         const msg = String(scanErr?.message || scanErr || "");
-        if (msg.includes("NOT_STARTED") || msg.includes("NOT_ENABLED")) {
-          setStatus("error");
-          Alert.alert(
-            "تعذّر تشغيل البلوتوث",
-            "أوقف البلوتوث ثم أعد تشغيله من إعدادات الهاتف، ثم اضغط بحث مجدداً.",
-            [{ text: "حسناً" }]
-          );
-          return;
-        }
-        throw scanErr;
+        setStatus("error");
+        Alert.alert(
+          "خطأ في البحث",
+          msg || "تعذّر البحث، تأكد من تفعيل البلوتوث.",
+          [{ text: "حسناً" }]
+        );
+        return;
       }
       const paired: BTPrinterDevice[] = [];
 

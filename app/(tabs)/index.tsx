@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Badge } from "@/components/Badge";
 import { Card } from "@/components/Card";
 import { StatCard } from "@/components/StatCard";
+import { PrinterCard } from "@/components/PrinterCard";
 import { useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -197,6 +198,10 @@ export default function HomeScreen() {
             <Feather name="chevron-left" size={16} color="#ef4444" />
           </TouchableOpacity>
         )}
+
+        {/* إعدادات الطابعة */}
+        <Text style={[styles.sectionTitle, { color: colors.foreground }]}>الطابعة</Text>
+        <PrinterCard />
 
         <Text style={[styles.sectionTitle, { color: colors.foreground }]}>القائمة الرئيسية</Text>
         {pendingApprovals > 0 && isAdmin && (

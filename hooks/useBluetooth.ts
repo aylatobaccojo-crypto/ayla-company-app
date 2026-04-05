@@ -125,32 +125,44 @@ export function useBluetooth() {
     }
 
     try {
-      // 2. فحص أو تفعيل البلوتوث
-      let btOn = await checkBluetooth();
+      // 2. فحص البلوتوث
+      const btOn = await checkBluetooth();
       if (!btOn) {
-        if ((Platform.Version as number) >= 33) {
+        setStatus("error");
+        Alert.alert(
+          "البلوتوث معطّل",
+          "يرجى تفعيل البلوتوث من إعدادات الهاتف ثم اضغط بحث مجدداً.",
+          [{ text: "حسناً" }]
+        );
+        return;
+      }
+
+      // 3. تأكد من تهيئة محرك البلوتوث قبل المسح
+      try {
+        await BluetoothManager.enableBluetooth();
+      } catch (_) {
+        // تجاهل — قد يُلقي خطأ إذا كان البلوتوث مفعّلاً مسبقاً
+      }
+      // انتظار قصير لضمان جاهزية المحرك
+      await new Promise((res) => setTimeout(res, 1200));
+
+      // 4. البحث عن الأجهزة
+      let result: any;
+      try {
+        result = await BluetoothManager.scanDevices();
+      } catch (scanErr: any) {
+        const msg = String(scanErr?.message || scanErr || "");
+        if (msg.includes("NOT_STARTED") || msg.includes("NOT_ENABLED")) {
           setStatus("error");
           Alert.alert(
-            "البلوتوث معطّل",
-            "يرجى تفعيل البلوتوث من إعدادات الهاتف ثم حاول مجدداً.",
+            "تعذّر تشغيل البلوتوث",
+            "أوقف البلوتوث ثم أعد تشغيله من إعدادات الهاتف، ثم اضغط بحث مجدداً.",
             [{ text: "حسناً" }]
           );
           return;
         }
-        try {
-          await BluetoothManager.enableBluetooth();
-          await new Promise((res) => setTimeout(res, 1500));
-          btOn = await BluetoothManager.isBluetoothEnabled();
-        } catch (_) { btOn = false; }
-        if (!btOn) {
-          setStatus("error");
-          Alert.alert("البلوتوث معطّل", "يرجى تفعيل البلوتوث من إعدادات الهاتف.");
-          return;
-        }
+        throw scanErr;
       }
-
-      // 3. البحث عن الأجهزة
-      const result = await BluetoothManager.scanDevices();
       const paired: BTPrinterDevice[] = [];
 
       if (result?.paired) {

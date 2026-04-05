@@ -224,7 +224,35 @@ export function useBluetooth() {
     await AsyncStorage.setItem(BT_PRINTER_KEY, JSON.stringify(device));
   }, []);
 
-  // طباعة فاتورة ESC/POS
+  // طباعة فاتورة كصورة (الطريقة الموثوقة للعربية)
+  const printAsImage = useCallback(async (base64png: string): Promise<boolean> => {
+    if (!isNative || !BluetoothEscposPrinter) {
+      Alert.alert("غير متاح", "الطباعة تعمل على تطبيق الأندرويد فقط.");
+      return false;
+    }
+    if (!connectedRef.current && !connectedPrinter) {
+      Alert.alert("غير متصل", "يرجى الاتصال بالطابعة أولاً.");
+      return false;
+    }
+    setStatus("printing");
+    try {
+      // عرض الطباعة بالبكسل: 58mm=384, 80mm=576
+      const printerWidth = paperSize === "58" ? 384 : 576;
+      // تجريد بادئة data URL إن وجدت
+      const base64 = base64png.startsWith("data:") ? base64png.split(",")[1] : base64png;
+      await BluetoothEscposPrinter.printPic(base64, { width: printerWidth, left: 0 });
+      // سطور فراغ لتحريك الورق بعد الطباعة
+      await BluetoothEscposPrinter.printText("\n\n\n", {});
+      setStatus("connected");
+      return true;
+    } catch (e: any) {
+      setStatus("error");
+      Alert.alert("خطأ في الطباعة", e?.message || "فشلت عملية الطباعة.");
+      return false;
+    }
+  }, [isNative, connectedPrinter, paperSize]);
+
+  // طباعة فاتورة ESC/POS نصية (احتياطي)
   const printReceipt = useCallback(async (
     lines: Array<{ text: string; align?: "left" | "center" | "right"; bold?: boolean; size?: "normal" | "large" }>
   ): Promise<boolean> => {
@@ -239,24 +267,15 @@ export function useBluetooth() {
     setStatus("printing");
     try {
       const ALIGN = { left: 0, center: 1, right: 2 };
-      // عرض الورق: 58mm = ~32 حرف، 80mm = ~48 حرف
       const lineWidth = paperSize === "58" ? 32 : 48;
-
       for (const line of lines) {
         await BluetoothEscposPrinter.printerAlign(ALIGN[line.align || "right"]);
-        const config: any = {
-          fonttype: line.bold ? 1 : 0,
-          // صفحة عربية 28 (Windows-1256) — تدعمها معظم طابعات ESC/POS
-          encoding: "windows-1256",
-          codepage: 28,
-        };
+        const config: any = { fonttype: line.bold ? 1 : 0, encoding: "windows-1256", codepage: 28 };
         if (line.size === "large") { config.widthtimes = 1; config.heigthtimes = 1; }
-        // قص النص إذا تجاوز عرض الورق
         const txt = line.text.length > lineWidth ? line.text.substring(0, lineWidth) : line.text;
         await BluetoothEscposPrinter.printText(txt + "\n", config);
       }
-      // سطور فراغ بعد الفاتورة
-      await BluetoothEscposPrinter.printText("\n\n\n", { encoding: "windows-1256", codepage: 28 });
+      await BluetoothEscposPrinter.printText("\n\n\n", {});
       setStatus("connected");
       return true;
     } catch (e: any) {
@@ -288,6 +307,7 @@ export function useBluetooth() {
     disconnectPrinter,
     savePrinter,
     printReceipt,
+    printAsImage,
     autoConnect,
   };
 }

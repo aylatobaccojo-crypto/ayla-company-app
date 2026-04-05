@@ -23,6 +23,60 @@ import { useColors } from "@/hooks/useColors";
 import type { BTPrinterDevice } from "@/hooks/useBluetooth";
 import { useBluetooth } from "@/hooks/useBluetooth";
 
+// WebView لتحويل الفاتورة إلى صورة
+let WebView: any = null;
+if (Platform.OS !== "web") {
+  try { WebView = require("react-native-webview").WebView; } catch (_) {}
+}
+
+// توليد HTML لرسم الفاتورة على Canvas بخط عربي صحيح
+function buildReceiptHtml(
+  lines: Array<{ text: string; align?: string; bold?: boolean; size?: string }>,
+  paperPx: number
+): string {
+  const linesJson = JSON.stringify(lines);
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+body{margin:0;padding:0;background:#fff;}canvas{display:block;}
+</style></head><body><canvas id="c"></canvas><script>
+(function(){
+  var lines=${linesJson};
+  var W=${paperPx};
+  var PAD=6, LH=20, LH_LG=28;
+  var F_N='13px sans-serif', F_B='bold 14px sans-serif', F_LG='bold 18px sans-serif';
+  var c=document.getElementById('c');
+  var ctx=c.getContext('2d');
+  // حساب الارتفاع الكلي
+  var totalH=PAD*2;
+  for(var i=0;i<lines.length;i++) totalH+=(lines[i].size==='large'?LH_LG:LH);
+  c.width=W; c.height=totalH;
+  // خلفية بيضاء
+  ctx.fillStyle='#fff';
+  ctx.fillRect(0,0,W,totalH);
+  ctx.fillStyle='#000';
+  ctx.textBaseline='top';
+  var y=PAD;
+  for(var i=0;i<lines.length;i++){
+    var l=lines[i];
+    var h=l.size==='large'?LH_LG:LH;
+    ctx.font=l.size==='large'?F_LG:(l.bold?F_B:F_N);
+    if(l.align==='center'){
+      ctx.direction='ltr';ctx.textAlign='center';
+      ctx.fillText(l.text,W/2,y);
+    } else if(l.align==='left'){
+      ctx.direction='ltr';ctx.textAlign='left';
+      ctx.fillText(l.text,PAD,y);
+    } else {
+      ctx.direction='rtl';ctx.textAlign='right';
+      ctx.fillText(l.text,W-PAD,y);
+    }
+    y+=h;
+  }
+  var dataURL=c.toDataURL('image/png');
+  window.ReactNativeWebView.postMessage(dataURL);
+})();
+</script></body></html>`;
+}
+
 export default function PrintInvoiceScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -34,6 +88,9 @@ export default function PrintInvoiceScreen() {
   const bt = useBluetooth();
   const [showDeviceModal, setShowDeviceModal] = useState(false);
   const autoConnectTried = useRef(false);
+  // WebView image capture
+  const [captureHtml, setCaptureHtml] = useState<string | null>(null);
+  const printCallbackRef = useRef<((base64: string) => void) | null>(null);
 
   const invoice = invoices.find((inv) => inv.id === id);
   const van = invoice ? vans.find((v) => v.id === invoice.vanId) : null;
@@ -196,10 +253,32 @@ export default function PrintInvoiceScreen() {
       }
       return;
     }
+    if (!WebView) {
+      // fallback to text mode if WebView not available
+      const lines = buildPrintLines();
+      const ok = await bt.printReceipt(lines);
+      if (ok) Alert.alert("تمت الطباعة ✓", "تم إرسال الفاتورة للطابعة بنجاح");
+      return;
+    }
+    // طباعة كصورة عبر WebView canvas
     const lines = buildPrintLines();
-    const ok = await bt.printReceipt(lines);
-    if (ok) {
-      Alert.alert("تمت الطباعة ✓", "تم إرسال الفاتورة للطابعة بنجاح");
+    const paperPx = bt.paperSize === "58" ? 384 : 576;
+    const html = buildReceiptHtml(lines, paperPx);
+    // ضبط callback قبل تحديث الـ HTML
+    printCallbackRef.current = async (base64: string) => {
+      printCallbackRef.current = null;
+      setCaptureHtml(null);
+      const ok = await bt.printAsImage(base64);
+      if (ok) Alert.alert("تمت الطباعة ✓", "تم إرسال الفاتورة للطابعة بنجاح");
+    };
+    setCaptureHtml(html);
+  };
+
+  // استقبال الصورة من WebView
+  const handleWebMessage = (event: any) => {
+    const data = event.nativeEvent.data;
+    if (printCallbackRef.current && data.startsWith("data:image")) {
+      printCallbackRef.current(data);
     }
   };
 
@@ -412,6 +491,19 @@ export default function PrintInvoiceScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* WebView مخفي لتحويل الفاتورة إلى صورة للطباعة */}
+      {WebView && captureHtml ? (
+        <View style={{ position: "absolute", top: -9999, left: -9999, width: 600, height: 1200 }}>
+          <WebView
+            source={{ html: captureHtml }}
+            onMessage={handleWebMessage}
+            javaScriptEnabled
+            originWhitelist={["*"]}
+            mixedContentMode="always"
+          />
+        </View>
+      ) : null}
     </View>
   );
 }

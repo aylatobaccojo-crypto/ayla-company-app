@@ -103,3 +103,28 @@ if (fs.existsSync(javaFile)) {
   fs.writeFileSync(javaFile, java);
   console.log('✓ Patched RNBluetoothManagerModule.java');
 }
+
+// ─── 3. Patch react-native-webview (Kotlin null safety) ──────────────────────
+const wvFile = path.join(
+  __dirname, '..', 'node_modules', 'react-native-webview',
+  'android', 'src', 'main', 'java', 'com', 'reactnativecommunity', 'webview',
+  'RNCWebViewManagerImpl.kt'
+);
+
+if (fs.existsSync(wvFile)) {
+  let kt = fs.readFileSync(wvFile, 'utf8');
+  // Fix: args.getString(0) returns String? but loadUrl expects String
+  const before = 'webView.loadUrl(args.getString(0))';
+  const after  = 'webView.loadUrl(args.getString(0)!!)';
+  if (kt.includes(before)) {
+    kt = kt.replace(before, after);
+    fs.writeFileSync(wvFile, kt);
+    console.log('✓ Patched RNCWebViewManagerImpl.kt (null safety)');
+  } else if (kt.includes(after)) {
+    console.log('ℹ RNCWebViewManagerImpl.kt already patched');
+  } else {
+    console.log('⚠ RNCWebViewManagerImpl.kt: pattern not found, skipping');
+  }
+} else {
+  console.log('ℹ react-native-webview not found, skipping WebView patch');
+}
